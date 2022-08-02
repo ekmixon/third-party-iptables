@@ -50,20 +50,32 @@ def run_test(name, payload):
                 if translation != expected:
                     test_passed = False
                     failed += 1
-                    result.append(name + ": " + red("Fail"))
-                    result.append(magenta("src: ") + line.rstrip(" \n"))
-                    result.append(magenta("exp: ") + expected)
-                    result.append(magenta("res: ") + translation + "\n")
+                    result.extend(
+                        (
+                            f"{name}: " + red("Fail"),
+                            magenta("src: ") + line.rstrip(" \n"),
+                            magenta("exp: ") + expected,
+                            magenta("res: ") + translation + "\n",
+                        )
+                    )
+
                     test_passed = False
                 else:
                     passed += 1
             else:
                 test_passed = False
                 errors += 1
-                result.append(name + ": " + red("Error: ") + "iptables-translate failure")
-                result.append(error.decode("utf-8"))
+                result.extend(
+                    (
+                        f"{name}: "
+                        + red("Error: ")
+                        + "iptables-translate failure",
+                        error.decode("utf-8"),
+                    )
+                )
+
     if (passed == tests) and not args.test:
-        print(name + ": " + green("OK"))
+        print(f"{name}: " + green("OK"))
     if not test_passed:
         print("\n".join(result))
     if args.test:
@@ -76,7 +88,7 @@ def load_test_files():
     test_files = total_tests = total_passed = total_error = total_failed = 0
     for test in sorted(os.listdir("extensions")):
         if test.endswith(".txlate"):
-            with open("extensions/" + test, "r") as payload:
+            with open(f"extensions/{test}", "r") as payload:
                 tests, passed, failed, errors = run_test(test, payload)
                 test_files += 1
                 total_tests += tests

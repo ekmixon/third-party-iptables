@@ -46,18 +46,20 @@ def print_error(reason, filename=None, lineno=None):
     '''
     Prints an error with nice colors, indicating file and line number.
     '''
-    print(filename + ": " + Colors.RED + "ERROR" +
-        Colors.ENDC + ": line %d (%s)" % (lineno, reason))
+    print(
+        (f"{filename}: {Colors.RED}ERROR" + Colors.ENDC)
+        + ": line %d (%s)" % (lineno, reason)
+    )
 
 
 def delete_rule(iptables, rule, filename, lineno):
     '''
     Removes an iptables rule
     '''
-    cmd = iptables + " -D " + rule
+    cmd = f"{iptables} -D {rule}"
     ret = execute_cmd(cmd, filename, lineno)
     if ret == 1:
-        reason = "cannot delete: " + iptables + " -I " + rule
+        reason = f"cannot delete: {iptables} -I {rule}"
         print_error(reason, filename, lineno)
         return -1
 
@@ -78,29 +80,22 @@ def run_test(iptables, rule, rule_save, res, filename, lineno, netns):
     '''
     ret = 0
 
-    cmd = iptables + " -A " + rule
+    cmd = f"{iptables} -A {rule}"
     if netns:
-            cmd = "ip netns exec ____iptables-container-test " + EXECUTEABLE + " " + cmd
+        cmd = f"ip netns exec ____iptables-container-test {EXECUTEABLE} {cmd}"
 
-    ret = execute_cmd(cmd, filename, lineno)
-
-    #
-    # report failed test
-    #
-    if ret:
-        if res == "OK":
-            reason = "cannot load: " + cmd
-            print_error(reason, filename, lineno)
-            return -1
-        else:
+    if ret := execute_cmd(cmd, filename, lineno):
+        if res != "OK":
             # do not report this error
             return 0
-    else:
-        if res == "FAIL":
-            reason = "should fail: " + cmd
-            print_error(reason, filename, lineno)
-            delete_rule(iptables, rule, filename, lineno)
-            return -1
+        reason = f"cannot load: {cmd}"
+        print_error(reason, filename, lineno)
+        return -1
+    elif res == "FAIL":
+        reason = f"should fail: {cmd}"
+        print_error(reason, filename, lineno)
+        delete_rule(iptables, rule, filename, lineno)
+        return -1
 
     matching = 0
     splitted = iptables.split(" ")
@@ -119,11 +114,11 @@ def run_test(iptables, rule, rule_save, res, filename, lineno, netns):
         elif splitted[0] == EBTABLES:
             command = EBTABLES_SAVE
 
-    path = os.path.abspath(os.path.curdir) + "/iptables/" + EXECUTEABLE
-    command = path + " " + command
+    path = f"{os.path.abspath(os.path.curdir)}/iptables/{EXECUTEABLE}"
+    command = f"{path} {command}"
 
     if netns:
-            command = "ip netns exec ____iptables-container-test " + command
+        command = f"ip netns exec ____iptables-container-test {command}"
 
     args = splitted[1:]
     proc = subprocess.Popen(command, shell=True,
@@ -135,7 +130,7 @@ def run_test(iptables, rule, rule_save, res, filename, lineno, netns):
     # check for segfaults
     #
     if proc.returncode == -11:
-        reason = "iptables-save segfaults: " + cmd
+        reason = f"iptables-save segfaults: {cmd}"
         print_error(reason, filename, lineno)
         delete_rule(iptables, rule, filename, lineno)
         return -1
@@ -143,16 +138,13 @@ def run_test(iptables, rule, rule_save, res, filename, lineno, netns):
     # find the rule
     matching = out.find(rule_save.encode('utf-8'))
     if matching < 0:
-        reason = "cannot find: " + iptables + " -I " + rule
+        reason = f"cannot find: {iptables} -I {rule}"
         print_error(reason, filename, lineno)
         delete_rule(iptables, rule, filename, lineno)
         return -1
 
     # Test "ip netns del NETNS" path with rules in place
-    if netns:
-        return 0
-
-    return delete_rule(iptables, rule, filename, lineno)
+    return 0 if netns else delete_rule(iptables, rule, filename, lineno)
 
 def execute_cmd(cmd, filename, lineno):
     '''
@@ -165,16 +157,16 @@ def execute_cmd(cmd, filename, lineno):
     '''
     global log_file
     if cmd.startswith('iptables ') or cmd.startswith('ip6tables ') or cmd.startswith('ebtables ') or cmd.startswith('arptables '):
-        cmd = os.path.abspath(os.path.curdir) + "/iptables/" + EXECUTEABLE + " " + cmd
+        cmd = f"{os.path.abspath(os.path.curdir)}/iptables/{EXECUTEABLE} {cmd}"
 
-    print("command: {}".format(cmd), file=log_file)
+    print(f"command: {cmd}", file=log_file)
     ret = subprocess.call(cmd, shell=True, universal_newlines=True,
         stderr=subprocess.STDOUT, stdout=log_file)
     log_file.flush()
 
     # generic check for segfaults
     if ret  == -11:
-        reason = "command segfaults: " + cmd
+        reason = f"command segfaults: {cmd}"
         print_error(reason, filename, lineno)
     return ret
 
@@ -211,81 +203,72 @@ def run_test_file(filename, netns):
         # default to iptables if not known prefix
         iptables = IPTABLES
 
-    f = open(filename)
+    with open(filename) as f:
+        tests = 0
+        passed = 0
+        table = ""
+        total_test_passed = True
 
-    tests = 0
-    passed = 0
-    table = ""
-    total_test_passed = True
+        if netns:
+            execute_cmd("ip netns add ____iptables-container-test", filename, 0)
 
-    if netns:
-        execute_cmd("ip netns add ____iptables-container-test", filename, 0)
+        for lineno, line in enumerate(f):
+            if line[0] == "#":
+                continue
 
-    for lineno, line in enumerate(f):
-        if line[0] == "#":
-            continue
+            if line[0] == ":":
+                chain_array = line.rstrip()[1:].split(",")
+                continue
 
-        if line[0] == ":":
-            chain_array = line.rstrip()[1:].split(",")
-            continue
+                    # external non-iptables invocation, executed as is.
+            if line[0] == "@":
+                external_cmd = line.rstrip()[1:]
+                if netns:
+                    external_cmd = f"ip netns exec ____iptables-container-test {external_cmd}"
+                execute_cmd(external_cmd, filename, lineno)
+                continue
 
-        # external non-iptables invocation, executed as is.
-        if line[0] == "@":
-            external_cmd = line.rstrip()[1:]
-            if netns:
-                external_cmd = "ip netns exec ____iptables-container-test " + external_cmd
-            execute_cmd(external_cmd, filename, lineno)
-            continue
+                    # external iptables invocation, executed as is.
+            if line[0] == "%":
+                external_cmd = line.rstrip()[1:]
+                if netns:
+                    external_cmd = f"ip netns exec ____iptables-container-test {EXECUTEABLE} {external_cmd}"
 
-        # external iptables invocation, executed as is.
-        if line[0] == "%":
-            external_cmd = line.rstrip()[1:]
-            if netns:
-                external_cmd = "ip netns exec ____iptables-container-test " + EXECUTEABLE + " " + external_cmd
-            execute_cmd(external_cmd, filename, lineno)
-            continue
+                execute_cmd(external_cmd, filename, lineno)
+                continue
 
-        if line[0] == "*":
-            table = line.rstrip()[1:]
-            continue
+            if line[0] == "*":
+                table = line.rstrip()[1:]
+                continue
 
-        if len(chain_array) == 0:
-            print("broken test, missing chain, leaving")
-            sys.exit()
+            if len(chain_array) == 0:
+                print("broken test, missing chain, leaving")
+                sys.exit()
 
-        test_passed = True
-        tests += 1
+            test_passed = True
+            tests += 1
 
-        for chain in chain_array:
-            item = line.split(";")
-            if table == "":
-                rule = chain + " " + item[0]
-            else:
-                rule = chain + " -t " + table + " " + item[0]
+            for chain in chain_array:
+                item = line.split(";")
+                rule = f"{chain} {item[0]}" if table == "" else f"{chain} -t {table} {item[0]}"
+                rule_save = f"{chain} {item[0]}" if item[1] == "=" else f"{chain} {item[1]}"
+                res = item[2].rstrip()
+                ret = run_test(iptables, rule, rule_save,
+                               res, filename, lineno + 1, netns)
 
-            if item[1] == "=":
-                rule_save = chain + " " + item[0]
-            else:
-                rule_save = chain + " " + item[1]
+                if ret < 0:
+                    test_passed = False
+                    total_test_passed = False
+                    break
 
-            res = item[2].rstrip()
-            ret = run_test(iptables, rule, rule_save,
-                           res, filename, lineno + 1, netns)
+            if test_passed:
+                passed += 1
 
-            if ret < 0:
-                test_passed = False
-                total_test_passed = False
-                break
+        if netns:
+            execute_cmd("ip netns del ____iptables-container-test", filename, 0)
+        if total_test_passed:
+            print(f"{filename}: {Colors.GREEN}OK{Colors.ENDC}")
 
-        if test_passed:
-            passed += 1
-
-    if netns:
-        execute_cmd("ip netns del ____iptables-container-test", filename, 0)
-    if total_test_passed:
-        print(filename + ": " + Colors.GREEN + "OK" + Colors.ENDC)
-
-    f.close()
     return tests, passed
 
 
@@ -299,9 +282,9 @@ def show_missing():
                 if i.startswith('lib') and i.endswith('.c')]
 
     def test_name(x):
-        return x[0:-2] + '.t'
-    missing = [test_name(i) for i in libfiles
-               if not test_name(i) in testfiles]
+        return x[:-2] + '.t'
+
+    missing = [test_name(i) for i in libfiles if test_name(i) not in testfiles]
 
     print('\n'.join(missing))
 
@@ -332,16 +315,17 @@ def main():
         return
 
     global EXECUTEABLE
-    EXECUTEABLE = "xtables-legacy-multi"
-    if args.nftables:
-        EXECUTEABLE = "xtables-nft-multi"
-
+    EXECUTEABLE = "xtables-nft-multi" if args.nftables else "xtables-legacy-multi"
     if os.getuid() != 0:
         print("You need to be root to run this, sorry")
         return
 
     os.putenv("XTABLES_LIBDIR", os.path.abspath(EXTENSIONS_PATH))
-    os.putenv("PATH", "%s/iptables:%s" % (os.path.abspath(os.path.curdir), os.getenv("PATH")))
+    os.putenv(
+        "PATH",
+        f'{os.path.abspath(os.path.curdir)}/iptables:{os.getenv("PATH")}',
+    )
+
 
     test_files = 0
     tests = 0
